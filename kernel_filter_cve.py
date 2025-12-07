@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
+
 import argparse
 import os
 import sys
 import json
 import requests
-import urllib.request
-import urllib.error
 
 def get_parameters():
     parser = argparse.ArgumentParser(
@@ -30,6 +29,12 @@ def get_parameters():
         help="Path where the CVE check output will be written"
     )
 
+    parser.add_argument(
+        "--nvd-api-key",
+        required=True,
+        help="NVD API key used for authenticated requests"
+    )
+
     args = parser.parse_args()
 
     if not os.path.isfile(args.cve_check_input):
@@ -45,11 +50,15 @@ def get_parameters():
         print(f"ERROR: Kernel path is not a git repository (missing .git/): {args.kernel_path}")
         sys.exit(1)
 
+    if not args.nvd_api_key.strip():
+        print("ERROR: NVD API key cannot be empty")
+        sys.exit(1)
+
     return args
 
 def kernel_get_cves_unfixed(path):
     """
-    Load CVE JSON input and return all CVE entries where status != 'Patched'.
+    Load CVE JSON input and return all CVE entries where status is 'Unpatched'.
     """
 
     with open(path, "r", encoding="utf-8") as f:
@@ -87,20 +96,31 @@ def kernel_get_cves_unfixed(path):
 
     return unfixed
 
-def nvd_get_cve(cve_id):
+def nvd_get_cve(cve_id, api_key):
     """
     Query NVD API for a CVE and return ONLY the reference URLs.
+    Uses authenticated request with API key.
     """
+    headers = {
+        "Content-Type": "application/json"
+    }
+
+    if api_key:
+        headers["apiKey"] = api_key
+
     url = f"https://services.nvd.nist.gov/rest/json/cves/2.0?cveId={cve_id}"
+    
     try:
-        r = requests.get(url, timeout=10)
+        r = requests.get(url, headers=headers, timeout=10)
         r.raise_for_status()
     except Exception as e:
         print(f"ERROR: Failed fetching NVD data for {cve_id}: {e}")
         return []
+
     data = r.json()
     urls = []
     records = data.get("vulnerabilities", [])
+
     for entry in records:
         cve = entry.get("cve", {})
         refs = cve.get("references", [])
@@ -109,6 +129,7 @@ def nvd_get_cve(cve_id):
             link = ref.get("url")
             if link:
                 urls.append(link)
+
     return urls
 
 def main():
@@ -128,14 +149,13 @@ def main():
     for entry in unfixed:
         cve_id = entry["id"]
         print(f"{cve_id}:")
-        urls = nvd_get_cve(cve_id)
+        urls = nvd_get_cve(cve_id, args.nvd_api_key)
         if not urls:
             print("  No URLs found.")
             continue
         for u in urls:
             print(f"  - {u}")
         print()
-
 
 if __name__ == "__main__":
     main()
