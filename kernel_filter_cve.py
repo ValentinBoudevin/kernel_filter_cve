@@ -237,36 +237,36 @@ def kernel_get_modified_files(path, git_cve_results):
 
 def _parse_makefile_objects(makefile_path):
     """
-    Parse a kernel Makefile to map CONFIG_* → object files.
+    Parse a kernel Makefile and return a reverse mapping:
+        object_or_folder → CONFIG_* option
+
+    Supports lines such as:
+        obj-$(CONFIG_X) += foo.o
+        obj-$(CONFIG_X) += foo/ bar.o
     """
-    config_map = {}
-    pattern = re.compile(r'obj-\$\((CONFIG_[A-Z0-9_]+)\)\s*\+=\s*(.*\.o)')
+    obj_to_config = {}
+    pattern = re.compile(
+        r'obj-\$\((CONFIG_[A-Z0-9_]+)\)\s*\+=\s*(.+)'
+    )
     try:
         with open(makefile_path, 'r', encoding='utf-8') as f:
             for line in f:
                 line = line.strip()
-                if line.startswith('#') or not line:
+                if not line or line.startswith('#'):
                     continue
-                match = pattern.match(line)
-                if match:
-                    config, objs = match.groups()
-                    objs_list = [o.strip() for o in objs.split()]
-                    config_map[config] = objs_list
+                m = pattern.match(line)
+                if not m:
+                    continue
+                config, rhs = m.groups()
+                entries = [tok.strip() for tok in rhs.split()]
+                for e in entries:
+                    obj_to_config[e] = config
+
     except FileNotFoundError:
         return {}
-    return config_map
 
-def _find_makefile_for_file(kernel_path,file_path):
-    """
-    Return the Makefile path in the same folder as the file.
-    """
-    full_path = os.path.join(kernel_path, file_path)
-    dir_path = os.path.dirname(full_path)
-    candidate = os.path.join(dir_path, "Makefile")
-    if os.path.isfile(candidate):
-        return candidate
-    return None
-    
+    return obj_to_config
+
 def kernel_find_defconfig_arguments(kernel_path, modified_files_results):
     """
     Given a dict { cve_id: [file1, file2, ...] } and the kernel path,
@@ -285,19 +285,21 @@ def kernel_find_defconfig_arguments(kernel_path, modified_files_results):
     for cve_id, files in modified_files_results.items():
         result[cve_id] = {}
         for f in files:
-            makefile = _find_makefile_for_file(kernel_path,f)
-            if not makefile:
-                result[cve_id][f] = None
-                continue
-
-            config_map = _parse_makefile_objects(makefile)
+            dir_path = os.path.dirname(os.path.join(kernel_path, f))
             basename = os.path.basename(f).replace(".c", ".o")
-            found = None
-            for config, objs in config_map.items():
-                if basename in objs:
-                    found = config
-                    break
-            result[cve_id][f] = found
+            while dir_path and dir_path.startswith(kernel_path):
+                makefile = os.path.join(dir_path, "Makefile")
+                if os.path.isfile(makefile):
+                    obj_map = _parse_makefile_objects(makefile)
+                    found = obj_map.get(basename)
+                    if found:
+                        result[cve_id][f] = found
+                        break
+                folder_name = os.path.basename(dir_path)
+                basename = folder_name + "/"
+                dir_path = os.path.dirname(dir_path)
+            else:
+                result[cve_id][f] = None
     return result
 
 def main():
