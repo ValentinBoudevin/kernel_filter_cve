@@ -39,6 +39,12 @@ def get_parameters():
         required=True,
         help="NVD API key used for authenticated requests"
     )
+
+    parser.add_argument(
+        "--config-path",
+        required=True,
+        help="Path to a defconfig file used to generate a temporary .config"
+    )
     
     parser.add_argument(
         "--verbose",
@@ -54,6 +60,10 @@ def get_parameters():
 
     if not os.path.isdir(args.kernel_path):
         print(f"ERROR: Kernel path is not a directory: {args.kernel_path}")
+        sys.exit(1)
+    
+    if not os.path.isfile(args.config_path):
+        print(f"ERROR: .config file does not exist: {args.config_path}")
         sys.exit(1)
 
     git_dir = os.path.join(args.kernel_path, ".git")
@@ -107,7 +117,7 @@ def kernel_get_cves_unfixed(path):
 
     return unfixed
 
-def nvd_get_cve(cve_id, api_key, max_retries=6, retry_wait=2):
+def nvd_get_cve(cve_id, api_key, max_retries=5, retry_wait=1):
     """
     Query NVD API for a CVE and return ONLY the reference URLs.
     Retries on HTTP 429 (rate limit).
@@ -320,7 +330,7 @@ def kernel_find_defconfig_arguments(kernel_path, modified_files_results):
                 result[cve_id][f] = None
     return result
 
-def kernel_defconfig_comparaison(kernel_path, defconfig_affected):
+def kernel_defconfig_comparaison(origin_config, defconfig_affected):
     """
     Compare the kernel .config file with the defconfig_affected mapping:
         {
@@ -337,9 +347,8 @@ def kernel_defconfig_comparaison(kernel_path, defconfig_affected):
 
     Only returns CVEs where at least one CONFIG_* is enabled in .config.
     """
-    config_file = os.path.join(kernel_path, ".config")
-    if not os.path.isfile(config_file):
-        print(f"ERROR: Missing .config at {config_file}")
+    if not os.path.isfile(origin_config):
+        print(f"ERROR: Missing .config at {origin_config}")
         return {}
     configs_to_find = {
         cfg
@@ -353,22 +362,18 @@ def kernel_defconfig_comparaison(kernel_path, defconfig_affected):
         r'^(' + "|".join(re.escape(cfg) for cfg in configs_to_find) + r')=(y|m|1)'
     )
     enabled = set()
-
-    with open(config_file, "r", encoding="utf-8") as f:
+    with open(origin_config, "r", encoding="utf-8") as f:
         for line in f:
             line = line.strip()
             m = pattern.match(line)
             if m:
                 enabled.add(m.group(1))
     result = {}
-
     for cve_id, file_cfg_map in defconfig_affected.items():
         enabled_cfgs = list({cfg for cfg in file_cfg_map.values() if cfg in enabled})
 
         if enabled_cfgs:
             result[cve_id] = enabled_cfgs
-
-
     return result
 
 def main():
@@ -424,7 +429,7 @@ def main():
                 print(f"  - {f}")
 
     print(f"CVEs with available patched files references: {len(modified_files_results)}")
-    
+
     defconfigs = kernel_find_defconfig_arguments(args.kernel_path, modified_files_results)
 
     if args.verbose:
@@ -435,7 +440,7 @@ def main():
                 
     print(f"CVEs with defconfig arguments found: {len(modified_files_results)}")
     
-    enabled_cves = kernel_defconfig_comparaison(args.kernel_path, defconfigs)
+    enabled_cves = kernel_defconfig_comparaison(args.config_path, defconfigs)
 
     print(f"CVEs which affects the kernel once filtered: {len(enabled_cves)}")
     
