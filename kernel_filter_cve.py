@@ -10,6 +10,8 @@ import re
 import time
 
 GIT_KERNEL_ORG_PATH = os.getcwd() + "/linux"
+NVD_CACHE_PATH = os.path.join(os.getcwd(), "nvd_cache.json")
+OUTPUT_FILES_NAME = "demo"
 
 def get_parameters():
     parser = argparse.ArgumentParser(
@@ -124,13 +126,9 @@ def nvd_get_cve(cve_id, api_key, max_retries=5, retry_wait=1):
     Uses a *single* JSON cache file next to the script.
     Only stores CVEs in cache if they contain a git.kernel.org stable URL.
     """
-
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    cache_path = os.path.join(script_dir, "nvd_cache.json")
-
     try:
-        if os.path.exists(cache_path):
-            with open(cache_path, "r", encoding="utf-8") as f:
+        if os.path.exists(NVD_CACHE_PATH):
+            with open(NVD_CACHE_PATH, "r", encoding="utf-8") as f:
                 cache = json.load(f)
         else:
             cache = {}
@@ -174,7 +172,7 @@ def nvd_get_cve(cve_id, api_key, max_retries=5, retry_wait=1):
     if any(u.startswith("https://git.kernel.org/stable/") for u in urls):
         cache[cve_id] = urls
         try:
-            with open(cache_path, "w", encoding="utf-8") as f:
+            with open(NVD_CACHE_PATH, "w", encoding="utf-8") as f:
                 json.dump(cache, f, indent=2)
         except Exception:
             print("WARNING: Cache write failed.")
@@ -509,7 +507,8 @@ def main():
             print(f"  {cve}: {', '.join(cfgs)}")
 
     os.makedirs(args.output_path, exist_ok=True)
-    enabled_cves_path = os.path.join(args.output_path, "enabled.kernel_remaining_cves.json")
+    enabled_cves_filename = f"{OUTPUT_FILES_NAME}.kernel_remaining_cves.json"
+    enabled_cves_path = os.path.join(args.output_path, enabled_cves_filename)
 
     try:
         with open(enabled_cves_path, "w", encoding="utf-8") as out:
@@ -519,7 +518,8 @@ def main():
         print(f"ERROR: Failed to write output file {enabled_cves_path}: {e}")
         sys.exit(1)
 
-    filtered_rootfs_path = os.path.join(args.output_path, "filtered.rootfs.json")
+    filtered_rootfs_filename = f"{OUTPUT_FILES_NAME}.rootfs.kernel_filtered.json"
+    filtered_rootfs_path = os.path.join(args.output_path, filtered_rootfs_filename)
     generate_kernel_filtered_cve_check(args.cve_check_input, enabled_cves, filtered_rootfs_path)
 
 if __name__ == "__main__":
