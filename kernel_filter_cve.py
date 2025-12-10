@@ -31,7 +31,7 @@ def get_parameters():
     parser.add_argument(
         "--output-path",
         required=True,
-        help="Path where the output cve-check and the cve-defconfig file will be written"
+        help="Path where the output cve-check and the kernel_remaining_cves file will be written"
     )
 
     parser.add_argument(
@@ -450,8 +450,10 @@ def main():
 
     if args.debug:
         print("DEBUG: Loading enabled_cves from previous output and skipping full processing...")
-        enabled_cves = __debug_load_enabled_cves_from_file(args.output_path)
-        output_rootfs = args.output_path.replace(".out", ".rootfs.json")
+        os.makedirs(args.output_path, exist_ok=True)
+        enabled_cves_path = os.path.join(args.output_path, "enabled.kernel_remaining_cves.json")
+        enabled_cves = __debug_load_enabled_cves_from_file(enabled_cves_path)
+        output_rootfs = enabled_cves_path.replace(".kernel_remaining_cves.json", ".rootfs.kernel_filtered.json")
         generate_kernel_filtered_cve_check(args.cve_check_input, enabled_cves, output_rootfs)
         sys.exit(0)
 
@@ -525,13 +527,19 @@ def main():
         for cve, cfgs in enabled_cves.items():
             print(f"  {cve}: {', '.join(cfgs)}")
 
+    os.makedirs(args.output_path, exist_ok=True)
+    enabled_cves_path = os.path.join(args.output_path, "enabled.kernel_remaining_cves.json")
+
     try:
-        with open(args.output_path, "w", encoding="utf-8") as out:
+        with open(enabled_cves_path, "w", encoding="utf-8") as out:
             json.dump(enabled_cves, out, indent=4)
-        print(f"Wrote enabled CVEs to: {args.output_path}")
+        print(f"Wrote enabled CVEs to: {enabled_cves_path}")
     except Exception as e:
-        print(f"ERROR: Failed to write output file {args.output_path}: {e}")
+        print(f"ERROR: Failed to write output file {enabled_cves_path}: {e}")
         sys.exit(1)
+
+    filtered_rootfs_path = os.path.join(args.output_path, "filtered.rootfs.json")
+    generate_kernel_filtered_cve_check(args.cve_check_input, enabled_cves, filtered_rootfs_path)
 
 if __name__ == "__main__":
     main()
