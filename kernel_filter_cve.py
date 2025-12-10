@@ -52,12 +52,6 @@ def get_parameters():
         help="If present, print extra logs details"
     )
 
-    parser.add_argument(
-        "--debug",
-        action="store_true",
-        help="If present, load enabled_cves from existing output and skip scanning"
-    )
-
     args = parser.parse_args()
 
     if not os.path.isfile(args.cve_check_input):
@@ -127,13 +121,28 @@ def nvd_get_cve(cve_id, api_key, max_retries=5, retry_wait=1):
     """
     Query NVD API for a CVE and return ONLY the reference URLs.
     Retries on HTTP 429 (rate limit).
+    Uses a *single* JSON cache file next to the script.
+    Only stores CVEs in cache if they contain a git.kernel.org stable URL.
     """
-    headers = {
-        "Content-Type": "application/json"
-    }
+
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    cache_path = os.path.join(script_dir, "nvd_cache.json")
+
+    try:
+        if os.path.exists(cache_path):
+            with open(cache_path, "r", encoding="utf-8") as f:
+                cache = json.load(f)
+        else:
+            cache = {}
+    except Exception:
+        print("WARNING: Cache corrupt. Reinitializing.")
+        cache = {}
+    if cve_id in cache:
+        return cache[cve_id]
+
+    headers = {"Content-Type": "application/json"}
     if api_key:
         headers["apiKey"] = api_key
-
     url = f"https://services.nvd.nist.gov/rest/json/cves/2.0?cveId={cve_id}"
 
     for attempt in range(1, max_retries + 1):
@@ -141,38 +150,34 @@ def nvd_get_cve(cve_id, api_key, max_retries=5, retry_wait=1):
             r = requests.get(url, headers=headers, timeout=10)
             if r.status_code == 429:
                 if attempt < max_retries:
-                    print(f"429 Too Many Requests for {cve_id}. "
-                          f"Retrying {attempt}/{max_retries} in {retry_wait}s...")
                     time.sleep(retry_wait)
                     continue
-                else:
-                    print(f"ERROR: Max retries reached for {cve_id}. Skipping...")
-                    return []
+                return []
             r.raise_for_status()
             break
-
-        except requests.HTTPError as e:
-            print(f"ERROR: Failed fetching NVD data for {cve_id}: {e}")
-            return []
-
-        except Exception as e:
-            print(f"ERROR: Unexpected failure fetching {cve_id}: {e}")
+        except Exception:
             return []
 
     try:
         data = r.json()
-    except ValueError:
-        print(f"ERROR: Failed to parse JSON for {cve_id}")
+    except Exception:
         return []
 
     urls = []
-    records = data.get("vulnerabilities", [])
-
-    for entry in records:
+    for entry in data.get("vulnerabilities", []):
         refs = entry.get("cve", {}).get("references", [])
         for ref in refs:
-            if ref.get("url"):
-                urls.append(ref["url"])
+            u = ref.get("url")
+            if u:
+                urls.append(u)
+
+    if any(u.startswith("https://git.kernel.org/stable/") for u in urls):
+        cache[cve_id] = urls
+        try:
+            with open(cache_path, "w", encoding="utf-8") as f:
+                json.dump(cache, f, indent=2)
+        except Exception:
+            print("WARNING: Cache write failed.")
 
     return urls
 
@@ -382,20 +387,6 @@ def kernel_defconfig_comparaison(origin_config, defconfig_affected):
             result[cve_id] = enabled_cfgs
     return result
 
-def __debug_load_enabled_cves_from_file(path):
-    """
-    Load enabled CVEs from a previous run (debug mode).
-    """
-    if not os.path.isfile(path):
-        print(f"ERROR: Debug mode requested but file not found: {path}")
-        sys.exit(1)
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except Exception as e:
-        print(f"ERROR: Failed to load debug file {path}: {e}")
-        sys.exit(1)
-
 def generate_kernel_filtered_cve_check(original_cve_path, enabled_cves, output_path):
     """
     Generate a new cve-check JSON file derived from original_cve_path but
@@ -447,16 +438,6 @@ def generate_kernel_filtered_cve_check(original_cve_path, enabled_cves, output_p
 
 def main():
     args = get_parameters()
-
-    if args.debug:
-        print("DEBUG: Loading enabled_cves from previous output and skipping full processing...")
-        os.makedirs(args.output_path, exist_ok=True)
-        enabled_cves_path = os.path.join(args.output_path, "enabled.kernel_remaining_cves.json")
-        enabled_cves = __debug_load_enabled_cves_from_file(enabled_cves_path)
-        output_rootfs = enabled_cves_path.replace(".kernel_remaining_cves.json", ".rootfs.kernel_filtered.json")
-        generate_kernel_filtered_cve_check(args.cve_check_input, enabled_cves, output_rootfs)
-        sys.exit(0)
-
     unfixed = kernel_get_cves_unfixed(args.cve_check_input)
 
     print(f"CVEs found unpatched CVEs in cve-check file: {len(unfixed)}")
