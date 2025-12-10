@@ -8,12 +8,13 @@ import requests
 import subprocess
 import re
 import time
+from typing import Dict, List, Optional
 
-GIT_KERNEL_ORG_PATH = os.getcwd() + "/linux"
+GIT_KERNEL_ORG_PATH = os.path.join(os.getcwd(), "linux")
 NVD_CACHE_PATH = os.path.join(os.getcwd(), "nvd_cache.json")
 OUTPUT_FILES_NAME = "demo"
 
-def get_parameters():
+def get_parameters() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Kernel CVE filter tool"
     )
@@ -79,7 +80,7 @@ def get_parameters():
 
     return args
 
-def kernel_get_cves_unfixed(path):
+def kernel_get_cves_unfixed(path: str) -> List[Dict[str, Optional[str]]]:
     """
     Load CVE JSON input and return all CVE entries where status is 'Unpatched'.
     """
@@ -119,7 +120,7 @@ def kernel_get_cves_unfixed(path):
 
     return unfixed
 
-def nvd_get_cve(cve_id, api_key, max_retries=5, retry_wait=1):
+def nvd_get_cve(cve_id: str, api_key: str, max_retries: int = 5, retry_wait: int = 1) -> List[str]:
     """
     Query NVD API for a CVE and return ONLY the reference URLs.
     Retries on HTTP 429 (rate limit).
@@ -179,7 +180,7 @@ def nvd_get_cve(cve_id, api_key, max_retries=5, retry_wait=1):
 
     return urls
 
-def kernel_filter_git_kernel_org(all_nvd_results):
+def kernel_filter_git_kernel_org(all_nvd_results: Dict[str, List[str]]) -> Dict[str, List[str]]:    
     """
     Given a dict: { cve_id: [url1, url2, ...] }
     return dict of only CVEs containing a git.kernel.org stable URL.
@@ -194,7 +195,7 @@ def kernel_filter_git_kernel_org(all_nvd_results):
 
     return match
 
-def kernel_clone_git_kernel_org(path):
+def kernel_clone_git_kernel_org(path: str) -> None:
     """
     Clone the Linux stable repository from kernel.org if it doesn't exist,
     or update it if it already exists.
@@ -236,7 +237,7 @@ def kernel_clone_git_kernel_org(path):
         except subprocess.CalledProcessError as e:
             print(f"ERROR: Failed to update repo: {e.stderr.strip()}")
 
-def kernel_get_modified_files(path, git_cve_results):
+def kernel_get_modified_files(path: str, git_cve_results: Dict[str, List[str]]) -> Dict[str, List[str]]:
     """
     Given { cve_id: [url1, url2, ...] } for URLs pointing to git.kernel.org,
     return { cve_id: [file1, file2, ...] } representing files modified by the commits.
@@ -272,7 +273,7 @@ def kernel_get_modified_files(path, git_cve_results):
 
     return modified_files
 
-def _parse_makefile_objects(makefile_path):
+def _parse_makefile_objects(makefile_path: str) -> Dict[str, str]:
     """
     Parse a kernel Makefile and return a reverse mapping:
         object_or_folder → CONFIG_* option
@@ -304,7 +305,7 @@ def _parse_makefile_objects(makefile_path):
 
     return obj_to_config
 
-def kernel_find_defconfig_arguments(kernel_path, modified_files_results):
+def kernel_find_defconfig_arguments(kernel_path: str, modified_files_results: Dict[str, List[str]]) -> Dict[str, Dict[str, Optional[str]]]:
     """
     Given a dict { cve_id: [file1, file2, ...] } and the kernel path,
     find the CONFIG_* defconfig option controlling each modified file.
@@ -339,7 +340,7 @@ def kernel_find_defconfig_arguments(kernel_path, modified_files_results):
                 result[cve_id][f] = None
     return result
 
-def kernel_defconfig_comparaison(origin_config, defconfig_affected):
+def kernel_defconfig_comparaison(origin_config: str, defconfig_affected: Dict[str, Dict[str, Optional[str]]]) -> Dict[str, List[str]]:
     """
     Compare the kernel .config file with the defconfig_affected mapping:
         {
@@ -385,7 +386,7 @@ def kernel_defconfig_comparaison(origin_config, defconfig_affected):
             result[cve_id] = enabled_cfgs
     return result
 
-def generate_kernel_filtered_cve_check(original_cve_path, enabled_cves, output_path):
+def generate_kernel_filtered_cve_check(original_cve_path: str, enabled_cves: Dict[str, List[str]], output_path: str) -> Dict:
     """
     Generate a new cve-check JSON file derived from original_cve_path but
     remove only the kernel CVEs that were in the original 'unfixed' set
@@ -434,7 +435,7 @@ def generate_kernel_filtered_cve_check(original_cve_path, enabled_cves, output_p
         sys.exit(1)
     return data
 
-def main():
+def main() -> None:
     args = get_parameters()
     unfixed = kernel_get_cves_unfixed(args.cve_check_input)
 
