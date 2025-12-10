@@ -19,7 +19,7 @@ def get_parameters():
     parser.add_argument(
         "--cve-check-input",
         required=True,
-        help="Path to the CVE check input file"
+        help="Path to the cve-check input file"
     )
 
     parser.add_argument(
@@ -29,9 +29,9 @@ def get_parameters():
     )
 
     parser.add_argument(
-        "--cve-check-output",
+        "--output-path",
         required=True,
-        help="Path where the CVE check output will be written"
+        help="Path where the output cve-check and the cve-defconfig file will be written"
     )
 
     parser.add_argument(
@@ -49,7 +49,13 @@ def get_parameters():
     parser.add_argument(
         "--verbose",
         action="store_true",
-        help="If present, print details of each unfixed CVE"
+        help="If present, print extra logs details"
+    )
+
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="If present, load enabled_cves from existing output and skip scanning"
     )
 
     args = parser.parse_args()
@@ -376,8 +382,79 @@ def kernel_defconfig_comparaison(origin_config, defconfig_affected):
             result[cve_id] = enabled_cfgs
     return result
 
+def __debug_load_enabled_cves_from_file(path):
+    """
+    Load enabled CVEs from a previous run (debug mode).
+    """
+    if not os.path.isfile(path):
+        print(f"ERROR: Debug mode requested but file not found: {path}")
+        sys.exit(1)
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception as e:
+        print(f"ERROR: Failed to load debug file {path}: {e}")
+        sys.exit(1)
+
+def generate_kernel_filtered_cve_check(original_cve_path, enabled_cves, output_path):
+    """
+    Generate a new cve-check JSON file derived from original_cve_path but
+    remove only the kernel CVEs that were in the original 'unfixed' set
+    (kernel_get_cves_unfixed) and are NOT present in enabled_cves.
+    """
+
+    with open(original_cve_path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+
+    if "package" not in data:
+        print("ERROR: Invalid CVE check input (missing 'package')")
+        sys.exit(1)
+
+    unfixed_entries = kernel_get_cves_unfixed(original_cve_path)
+    unfixed_ids = { e["id"] for e in unfixed_entries if e.get("id") }
+
+    if isinstance(enabled_cves, dict):
+        enabled_set = set(enabled_cves.keys())
+    elif isinstance(enabled_cves, (list, set)):
+        enabled_set = set(enabled_cves)
+    else:
+        enabled_set = set()
+    removed = 0
+    kept = 0
+
+    for pkg in data.get("package", []):
+        if pkg.get("name") != "linux-yocto":
+            continue
+        new_issues = []
+        for issue in pkg.get("issue", []):
+            iid = issue.get("id")
+            if iid in unfixed_ids and iid not in enabled_set:
+                removed += 1
+                continue
+            new_issues.append(issue)
+            kept += 1
+        pkg["issue"] = new_issues
+
+    try:
+        with open(output_path, "w", encoding="utf-8") as out:
+            json.dump(data, out, indent=4)
+        print(f"Wrote filtered rootfs CVE report to: {output_path}")
+        print(f"Kernel CVEs removed: {removed}, kept: {kept}")
+    except Exception as e:
+        print(f"ERROR: Failed writing {output_path}: {e}")
+        sys.exit(1)
+    return data
+
 def main():
     args = get_parameters()
+
+    if args.debug:
+        print("DEBUG: Loading enabled_cves from previous output and skipping full processing...")
+        enabled_cves = __debug_load_enabled_cves_from_file(args.output_path)
+        output_rootfs = args.output_path.replace(".out", ".rootfs.json")
+        generate_kernel_filtered_cve_check(args.cve_check_input, enabled_cves, output_rootfs)
+        sys.exit(0)
+
     unfixed = kernel_get_cves_unfixed(args.cve_check_input)
 
     print(f"CVEs found unpatched CVEs in cve-check file: {len(unfixed)}")
@@ -449,11 +526,11 @@ def main():
             print(f"  {cve}: {', '.join(cfgs)}")
 
     try:
-        with open(args.cve_check_output, "w", encoding="utf-8") as out:
+        with open(args.output_path, "w", encoding="utf-8") as out:
             json.dump(enabled_cves, out, indent=4)
-        print(f"Wrote enabled CVEs to: {args.cve_check_output}")
+        print(f"Wrote enabled CVEs to: {args.output_path}")
     except Exception as e:
-        print(f"ERROR: Failed to write output file {args.cve_check_output}: {e}")
+        print(f"ERROR: Failed to write output file {args.output_path}: {e}")
         sys.exit(1)
 
 if __name__ == "__main__":
